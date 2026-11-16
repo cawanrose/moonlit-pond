@@ -1,0 +1,7 @@
+*.jks
+*.keystore
+keystore*.txt
+*.apk
+*.idsig
+.godot/imported/
+override.cfg

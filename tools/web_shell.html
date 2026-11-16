@@ -1,0 +1,149 @@
+<title>폴짝, 달빛 연못</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nanum+Myeongjo:wght@400;700&display=swap">
+<style>
+/* Layout: one portrait pond window centred on a night-water ground; the game fills it edge to edge. */
+:root {
+  --night: #04140f;      /* deep pond water behind the window */
+  --pond: #0b2a22;       /* window frame / loading ground */
+  --leaf: #8fd17a;       /* lily-pad green, progress */
+  --moon: #f4f0d8;       /* moonlit text */
+  --dim: #9fb8a9;        /* secondary text */
+  --font-title: "Nanum Myeongjo", "Noto Serif KR", "Apple SD Gothic Neo", serif;
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+body {
+  background: radial-gradient(120% 80% at 50% 30%, #0a2a20 0%, var(--night) 70%);
+  color: var(--moon);
+  overflow: hidden;
+  touch-action: none;
+  padding-left: max(0px, env(safe-area-inset-left, 0px));
+  padding-right: max(0px, env(safe-area-inset-right, 0px));
+  font-family: var(--font-title);
+}
+#stage {
+  position: relative;
+  height: 100%;
+  aspect-ratio: 9 / 19.5;
+  max-width: 100%;
+  margin: 0 auto;
+  background: var(--pond);
+  overflow: hidden;
+}
+@media (min-width: 700px) {
+  #stage { border-radius: 18px; box-shadow: 0 0 0 1px #ffffff14, 0 30px 80px #0009; height: calc(100% - 32px); margin-top: 16px; }
+}
+#canvas { display: block; width: 100%; height: 100%; outline: none; }
+#status {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+  background: radial-gradient(90% 60% at 50% 40%, #12382c 0%, var(--pond) 75%);
+  padding-inline: max(16px, env(safe-area-inset-left, 0px));
+  text-align: center;
+}
+#status h1 { margin: 0; font-size: 30px; font-weight: 700; letter-spacing: 0.04em; text-wrap: balance; }
+#status .eyebrow { font-size: 11px; letter-spacing: 0.4em; color: var(--dim); text-transform: uppercase; }
+#bar { width: min(60%, 220px); height: 3px; border-radius: 3px; background: #ffffff1f; overflow: hidden; }
+#bar i { display: block; height: 100%; width: 0%; background: var(--leaf); transition: width .2s; }
+#note { font-size: 13px; color: var(--dim); min-height: 1.4em; white-space: pre-line; max-width: 30ch; }
+.dew { width: 22px; height: 22px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #fff 0 12%, #cfeec3 30%, #6fbf63 75%); box-shadow: 0 0 18px #a8f09a88; animation: hop 1.4s ease-in-out infinite; }
+@keyframes hop { 0%,100% { transform: translateY(0) } 45% { transform: translateY(-14px) } }
+@media (prefers-reduced-motion: reduce) { .dew { animation: none; } }
+#credit { position: absolute; bottom: calc(14px + env(safe-area-inset-bottom, 0px)); left: 0; right: 0; font-size: 11px; letter-spacing: 0.25em; color: #f4f0d880; }
+</style>
+
+<div id="stage">
+  <canvas id="canvas" tabindex="0">이 브라우저는 canvas를 지원하지 않아요.</canvas>
+  <div id="status">
+    <div class="eyebrow">Moonlit Pond</div>
+    <h1>폴짝, 달빛 연못</h1>
+    <div class="dew" aria-hidden="true"></div>
+    <div id="bar"><i id="barfill"></i></div>
+    <div id="note">연못을 불러오는 중…</div>
+    <div id="credit">moonshot2026 · v1.09</div>
+  </div>
+</div>
+
+<script>
+// The engine and the game pack are published as compressed / split files (the host caps one file at 15MB).
+// Rebuild them in the browser and hand them to Godot as if they were the plain index.wasm / index.pck.
+(function () {
+  const PCK_PARTS = ["pond_0.wasm", "pond_1.wasm", "pond_2.wasm", "pond_3.wasm", "pond_4.wasm"];
+  const realFetch = window.fetch.bind(window);
+  function streamParts(urls) {
+    let i = 0, reader = null;
+    return new ReadableStream({
+      async pull(ctrl) {
+        for (;;) {
+          if (!reader) {
+            if (i >= urls.length) { ctrl.close(); return; }
+            const r = await realFetch(urls[i++]);
+            if (!r.ok) throw new Error("파일을 받지 못했어요: " + r.status);
+            reader = r.body.getReader();
+          }
+          const { done, value } = await reader.read();
+          if (done) { reader = null; continue; }
+          ctrl.enqueue(value); return;
+        }
+      }
+    });
+  }
+  window.fetch = function (input, init) {
+    const url = typeof input === "string" ? input : (input && input.url) || "";
+    const name = url.split("?")[0].split("/").pop();
+    if (name === "index.wasm") {
+      return realFetch("engine_gz.wasm").then((r) => {
+        if (!r.ok) throw new Error("엔진 파일을 받지 못했어요: " + r.status);
+        const body = r.body.pipeThrough(new DecompressionStream("gzip"));
+        return new Response(body, { status: 200, headers: { "Content-Type": "application/wasm", "Content-Length": "39514754" } });
+      });
+    }
+    if (name === "index.pck") {
+      return Promise.resolve(new Response(streamParts(PCK_PARTS), { status: 200, headers: { "Content-Type": "application/octet-stream", "Content-Length": "53296516" } }));
+    }
+    return realFetch(input, init);
+  };
+})();
+</script>
+<script src="index.js"></script>
+<script>
+(function () {
+  const canvas = document.getElementById("canvas");
+  const stage = document.getElementById("stage");
+  function fit() {
+    const r = stage.getBoundingClientRect();
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.round(r.width * dpr);
+    canvas.height = Math.round(r.height * dpr);
+  }
+  fit();
+  window.addEventListener("resize", fit);
+
+  const GODOT_CONFIG = {"args":[],"canvasResizePolicy":0,"executable":"index","experimentalVK":false,
+    "fileSizes":{"index.pck":53296516,"index.wasm":39514754},"focusCanvas":true,"gdextensionLibs":[]};
+  const status = document.getElementById("status");
+  const fill = document.getElementById("barfill");
+  const note = document.getElementById("note");
+  const missing = Engine.getMissingFeatures({ threads: false });
+  if (missing.length) {
+    note.textContent = "이 브라우저에서는 실행할 수 없어요.\n" + missing.join("\n");
+    return;
+  }
+  const engine = new Engine(GODOT_CONFIG);
+  engine.startGame({
+    onProgress: function (cur, total) {
+      if (cur > 0 && total > 0) {
+        fill.style.width = Math.min(100, (cur / total) * 100).toFixed(1) + "%";
+        note.textContent = "연못을 불러오는 중… " + Math.round(cur / 1048576) + " / " + Math.round(total / 1048576) + "MB";
+      }
+    }
+  }).then(function () {
+    status.remove();
+    fit();
+  }, function (err) {
+    console.error(err);
+    note.textContent = "불러오지 못했어요.\n" + (err && err.message ? err.message : String(err)) + "\n새로고침해 보세요.";
+  });
+})();
+</script>
