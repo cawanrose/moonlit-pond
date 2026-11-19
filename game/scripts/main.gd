@@ -4,8 +4,8 @@ extends Node2D
 
 const DESIGN_W:= 360.0
 # build identity (APK protection guide §3): stays in every copy of the game, readable only from the compiled code
-const BUILD_NO:= 114
-const BUILD_VER:= "1.14"
+const BUILD_NO:= 115
+const BUILD_VER:= "1.15"
 const BUILD_DATE:= "2026-11-19"
 const MAKER_ID:= "moonshot2026"
 const BUILD_FP:= "mp-e1af284cb6ee4fa6"      # per-build fingerprint, recorded in the build log
@@ -170,7 +170,9 @@ func _ready() -> void:
 	intro.started.connect(func ():
 		in_intro = false
 		ui.visible = true
-		title_box.visible = not ever_jumped)
+		title_box.visible = not ever_jumped
+		if dew_name == "" and not autoplay:
+			get_tree().create_timer(1.2).timeout.connect(_ask_dew_name))
 	add_child(intro)
 	ambient = AudioStreamPlayer.new()
 	ambient.stream = SND.ambient
@@ -454,6 +456,10 @@ func _layout() -> void:
 		restart_btn.position = Vector2(vs.x - 62, vs.y - 102)
 	if vib_btn:
 		vib_btn.position = Vector2(vs.x - 62, vs.y - 66)
+	if photo_btn:
+		photo_btn.position = Vector2(vs.x - 56, vs.y - 238)
+	if name_btn:
+		name_btn.position = Vector2(vs.x * 0.5 - 110, 110)
 	if credit:
 		credit.size = Vector2(vs.x, 18)
 		credit.position = Vector2(0, vs.y - 22)
@@ -767,6 +773,11 @@ const FISH_EVERY:= 3
 var followers: Array = []
 var _fish_pop:= 0.0
 var restart_btn: Button
+var photo_btn: Button
+var name_btn: Button
+var dew_name:= ""          # v115: the player names their dew on the first walk
+var _name_panel: Control
+var _photo_busy:= false
 var vib_btn: Button
 var vib_level:= 2  # 0 off, 1 weak, 2 mid, 3 strong
 var _hap_last:= -1000.0
@@ -1595,6 +1606,7 @@ func _save_book() -> void:
 	cf.set_value("book", "giant_seen", giant_seen)
 	cf.set_value("book", "corner_taps", corner_taps)
 	cf.set_value("book", "tutorial_done", tutorial_done)
+	cf.set_value("book", "dew_name", dew_name)
 	cf.set_value("settings", "vibration", vib_level)
 	cf.save("user://moonlit_pond.cfg")
 
@@ -1613,6 +1625,7 @@ func _load_book() -> void:
 	giant_seen = int(cf.get_value("book", "giant_seen", 0))
 	corner_taps = int(cf.get_value("book", "corner_taps", 0))
 	tutorial_done = bool(cf.get_value("book", "tutorial_done", false))
+	dew_name = str(cf.get_value("book", "dew_name", ""))
 	vib_level = clampi(int(cf.get_value("settings", "vibration", 2)), 0, 3)
 
 
@@ -1676,6 +1689,15 @@ func _build_book_ui(root: Control) -> void:
 	vib_btn.size = Vector2(58, 28)
 	vib_btn.pressed.connect(_cycle_vib)
 	root.add_child(vib_btn)
+	photo_btn = _pill_button("사진", Vector2(52, 32), Color(0.03, 0.14, 0.1))
+	photo_btn.pressed.connect(_take_photo)
+	root.add_child(photo_btn)
+	name_btn = Button.new()
+	name_btn.flat = true
+	name_btn.focus_mode = Control.FOCUS_NONE
+	name_btn.size = Vector2(220, 26)
+	name_btn.pressed.connect(_ask_dew_name)
+	root.add_child(name_btn)
 	book_panel = PanelContainer.new()
 	var psb:= StyleBoxFlat.new()
 	psb.bg_color = Color(0.02, 0.09, 0.08, 0.88)
@@ -4414,7 +4436,8 @@ func _draw_hud() -> void:
 		return
 	var cx:= vs.x * 0.5
 	# v114: no score or combo on screen (healing mode); a quiet note of today's walk instead
-	var sub:= "건넌 잎 %d   ·   만난 친구 %d" % [step, koi_met + turtles]
+	var who:= dew_name if dew_name != "" else "이슬"
+	var sub:= "%s   ·   건넌 잎 %d   ·   만난 친구 %d" % [who, step, koi_met + turtles]
 	var sw:= font.get_string_size(sub, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x
 	hud.draw_string(font, Vector2(cx - sw * 0.5 + 1, 128), sub, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0, 0.05, 0.06, 0.35))
 	hud.draw_string(font, Vector2(cx - sw * 0.5, 127), sub, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.93, 1.0, 0.96, 0.85))
@@ -5877,3 +5900,165 @@ func _update_groove(delta: float) -> void:
 	var e:= clampf((linear_to_db(maxf(mag, 1.0000000000000001e-05)) + 42.0) / 30.0, 0.0, 1.0)
 	groove = lerpf(groove, e, clampf(delta * 3.0, 0.0, 1.0))
 	frog.groove = groove
+
+
+# ---------------------------------------------------------------- v115: naming and photos
+func _pill_button(text: String, sz: Vector2, base: Color) -> Button:
+	var b:= Button.new()
+	b.text = text
+	b.focus_mode = Control.FOCUS_NONE
+	b.add_theme_font_override("font", font)
+	b.add_theme_font_size_override("font_size", 13)
+	b.add_theme_color_override("font_color", Color(1.0, 0.97, 0.9))
+	for st in ["normal", "hover", "pressed"]:
+		var sb:= StyleBoxFlat.new()
+		sb.bg_color = Color(base, 0.45 if st != "pressed" else 0.7)
+		sb.set_corner_radius_all(16)
+		sb.border_color = Color(1.0, 0.97, 0.85, 0.35)
+		sb.set_border_width_all(1)
+		b.add_theme_stylebox_override(st, sb)
+	b.size = sz
+	b.pivot_offset = sz * 0.5
+	return b
+
+
+func _ask_dew_name() -> void:
+	if _name_panel and is_instance_valid(_name_panel):
+		return
+	locked = true
+	var shade:= ColorRect.new()
+	shade.color = Color(0.0, 0.04, 0.03, 0.55)
+	shade.set_anchors_preset(Control.PRESET_FULL_RECT)
+	shade.mouse_filter = Control.MOUSE_FILTER_STOP
+	ui.add_child(shade)
+	_name_panel = shade
+	var box:= PanelContainer.new()
+	var sb:= StyleBoxFlat.new()
+	sb.bg_color = Color(0.04, 0.15, 0.11, 0.94)
+	sb.set_corner_radius_all(18)
+	sb.border_color = Color(1.0, 0.96, 0.82, 0.4)
+	sb.set_border_width_all(1)
+	sb.content_margin_left = 22
+	sb.content_margin_right = 22
+	sb.content_margin_top = 20
+	sb.content_margin_bottom = 18
+	box.add_theme_stylebox_override("panel", sb)
+	box.size = Vector2(280, 0)
+	box.position = Vector2(vs.x * 0.5 - 140, vs.y * 0.34)
+	shade.add_child(box)
+	var col:= VBoxContainer.new()
+	col.add_theme_constant_override("separation", 12)
+	box.add_child(col)
+	var title:= _label("이슬에게 이름을 지어 주세요", 16, Color(1.0, 0.98, 0.9))
+	col.add_child(title)
+	var sub:= _label("연못을 함께 건널 작은 친구예요", 12, Color(0.85, 0.95, 0.9, 0.85))
+	col.add_child(sub)
+	var edit:= LineEdit.new()
+	edit.max_length = 8
+	edit.text = dew_name
+	edit.placeholder_text = "이슬"
+	edit.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	edit.add_theme_font_override("font", font)
+	edit.add_theme_font_size_override("font_size", 16)
+	edit.custom_minimum_size = Vector2(0, 40)
+	var esb:= StyleBoxFlat.new()
+	esb.bg_color = Color(1.0, 1.0, 1.0, 0.1)
+	esb.set_corner_radius_all(12)
+	esb.content_margin_left = 10
+	esb.content_margin_right = 10
+	edit.add_theme_stylebox_override("normal", esb)
+	edit.add_theme_stylebox_override("focus", esb)
+	col.add_child(edit)
+	var row:= HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 10)
+	col.add_child(row)
+	var later:= _pill_button("나중에", Vector2(92, 36), Color(0.03, 0.14, 0.1))
+	later.custom_minimum_size = Vector2(92, 36)
+	var ok:= _pill_button("이름 짓기", Vector2(110, 36), Color(0.1, 0.32, 0.2))
+	ok.custom_minimum_size = Vector2(110, 36)
+	row.add_child(later)
+	row.add_child(ok)
+	var finish:= func (keep: bool) -> void:
+		var nm:= edit.text.strip_edges()
+		if keep and nm != "":
+			dew_name = nm
+		elif dew_name == "":
+			dew_name = "이슬"
+		_save_book()
+		_log("dew_name %s" % dew_name)
+		DisplayServer.virtual_keyboard_hide()
+		shade.queue_free()
+		_name_panel = null
+		locked = false
+		hud.queue_redraw()
+		if keep and nm != "":
+			_show_quip("안녕, %s! 같이 연못을 건너요" % dew_name)
+			_haptic("tap")
+	ok.pressed.connect(finish.bind(true))
+	later.pressed.connect(finish.bind(false))
+	edit.text_submitted.connect(func (_t): finish.call(true))
+	edit.grab_focus()
+
+
+func _photo_dir() -> String:
+	if OS.get_name() == "Android":
+		var pics:= OS.get_system_dir(OS.SYSTEM_DIR_PICTURES)
+		if pics != "":
+			var d:= pics.path_join("MoonlitPond")
+			if DirAccess.make_dir_recursive_absolute(d) == OK:
+				return d
+	var u:= OS.get_user_data_dir().path_join("photos")
+	DirAccess.make_dir_recursive_absolute(u)
+	return u
+
+
+func _take_photo() -> void:
+	if _photo_busy or in_intro:
+		return
+	_photo_busy = true
+	_haptic("tap")
+	# hide the buttons and counters, keep a small signature at the bottom
+	var hidden:= []
+	for c in [sound_btn, book_btn, restart_btn, vib_btn, photo_btn, name_btn, hud, drops_label, credit]:
+		if c and is_instance_valid(c) and c.visible:
+			c.visible = false
+			hidden.append(c)
+	if drops_fx:
+		drops_fx.visible = false
+	if _quip_label and is_instance_valid(_quip_label):
+		_quip_label.visible = false
+	var who:= dew_name if dew_name != "" else "이슬"
+	var sig:= _label("폴짝, 달빛 연못  ·  %s의 산책" % who, 13, Color(1.0, 0.98, 0.9, 0.9))
+	sig.size = Vector2(vs.x, 20)
+	sig.position = Vector2(0, vs.y - 34)
+	ui.add_child(sig)
+	await RenderingServer.frame_post_draw
+	await RenderingServer.frame_post_draw
+	var img:= get_viewport().get_texture().get_image()
+	sig.queue_free()
+	for c in hidden:
+		c.visible = true
+	if drops_fx:
+		drops_fx.visible = true
+	var stamp:= Time.get_datetime_string_from_system().replace(":", "").replace("-", "").replace("T", "_")
+	var path:= _photo_dir().path_join("moonlitpond_%s.png" % stamp)
+	var err:= img.save_png(path)
+	_log("photo %s err=%d" % [path, err])
+	# a soft white flash, like a shutter
+	var flash:= ColorRect.new()
+	flash.color = Color(1, 1, 1, 0.55)
+	flash.set_anchors_preset(Control.PRESET_FULL_RECT)
+	flash.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui.add_child(flash)
+	var tw:= create_tween()
+	tw.tween_property(flash, "color:a", 0.0, 0.45)
+	tw.tween_callback(flash.queue_free)
+	_play("sparkle", 1.2, -14.0)
+	if err == OK:
+		_show_quip("사진을 앨범(Pictures/MoonlitPond)에 담았어요" if OS.get_name() == "Android" else "사진을 저장했어요")
+		if OS.has_feature("web"):
+			JavaScriptBridge.download_buffer(img.save_png_to_buffer(), path.get_file(), "image/png")
+	else:
+		_show_quip("사진을 저장하지 못했어요")
+	_photo_busy = false
