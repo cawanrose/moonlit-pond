@@ -4,9 +4,9 @@ extends Node2D
 
 const DESIGN_W:= 360.0
 # build identity (APK protection guide §3): stays in every copy of the game, readable only from the compiled code
-const BUILD_NO:= 113
-const BUILD_VER:= "1.13"
-const BUILD_DATE:= "2026-11-15"
+const BUILD_NO:= 114
+const BUILD_VER:= "1.14"
+const BUILD_DATE:= "2026-11-19"
 const MAKER_ID:= "moonshot2026"
 const BUILD_FP:= "mp-e1af284cb6ee4fa6"      # per-build fingerprint, recorded in the build log
 const SIGN_SHA256:= "7C:CE:CB:6A:DE:E3:C3:F7"   # first bytes of the release signing certificate (2026 key)
@@ -119,6 +119,7 @@ var score:= 0
 var rhythm_combo:= 0
 var best_combo:= 0
 var turtles:= 0
+var koi_met:= 0   # v114: hidden koi found this walk
 const TURTLE_EVERY:= 16
 var big_turtle: Turtle
 var path_heading:= 0.0
@@ -826,6 +827,48 @@ var _hint_counts:= [0, 0, 0]
 const PHASE_HINTS:= ["길을 막은 연잎을 톡 두드려 물길을 열어요", "물 위를 톡 두드려 보세요", "떠오른 연잎을 눌렀다 떼 보세요"]
 
 
+var tutorial_done:= false
+var tut_pos:= Vector2.INF   # where the ring pulses (layer space), INF = none
+var _tut_t:= 0.0
+
+
+func _update_tutorial() -> void:
+	tut_pos = Vector2.INF
+	if tutorial_done or in_intro or frog.jumping or locked or bloomed or autoplay:
+		return
+	var t:= _target()
+	if t == null:
+		return
+	if step >= 2:
+		tutorial_done = true
+		_save_book()
+		_log("tutorial_done")
+		return
+	if t.reveal < 0.6 or t.submerged > 0.3:
+		var bl:= _blockers(step)
+		if bl.size() > 0:
+			var best: LilyPad = bl[0]
+			for nd in bl:
+				if (nd as LilyPad).position.distance_to(t.position) < best.position.distance_to(t.position):
+					best = nd
+			tut_pos = best.position
+		else:
+			tut_pos = t.position
+	else:
+		tut_pos = t.position
+
+
+func _draw_tutorial() -> void:
+	if tut_pos == Vector2.INF:
+		return
+	var p:= tut_pos   # touch_fx draws in layer space
+	var k:= fmod(_tut_t, 1.6) / 1.6
+	touch_fx.draw_circle(p, 10.0, Color(1.0, 0.98, 0.86, 0.55))
+	touch_fx.draw_arc(p, 14.0 + 34.0 * k, 0, TAU, 48, Color(1.0, 0.97, 0.8, 0.7 * (1.0 - k)), 2.0, true)
+	var k2:= fmod(_tut_t + 0.8, 1.6) / 1.6
+	touch_fx.draw_arc(p, 14.0 + 34.0 * k2, 0, TAU, 48, Color(1.0, 0.97, 0.8, 0.5 * (1.0 - k2)), 1.4, true)
+
+
 func _update_phase_hint() -> void:
 	if frog.jumping or locked or bloomed or in_intro:
 		return
@@ -838,7 +881,7 @@ func _update_phase_hint() -> void:
 	if ph != _hint_phase:
 		_hint_phase = ph
 		_hint_done = false
-	if _hint_done or _hint_counts[ph] >= 2 or _idle_tap < 2.5 or (PUSH_MODE and ph != 0):
+	if _hint_done or _hint_counts[ph] >= 2 or _idle_tap < (0.6 if not tutorial_done else 2.5) or (PUSH_MODE and ph != 0):
 		return
 	_hint_done = true
 	_hint_counts[ph] += 1
@@ -849,6 +892,7 @@ const OPEN_MIN:= 90.0
 const OPEN_MAX:= 380.0
 const OPEN_HALF:= 44.0
 const DEW_MIN:= 0.42
+const DEW_REST:= 0.62   # v114: smallest the dew gets in healing mode
 const DEW_MAX:= 1.4
 var open_len:= 0.0
 var open_dir:= Vector2.UP
@@ -998,6 +1042,7 @@ func _flow_tap(screen_pt: Vector2) -> void:
 
 func _update_flow(delta: float) -> void:
 	_flow_time += delta
+	_tut_t += delta
 	_update_drops(delta)
 	_update_treasure(delta)
 	for m in _tap_marks:
@@ -1039,6 +1084,7 @@ func _update_flow(delta: float) -> void:
 		elif was:
 			_clear_wait = 0.0
 		_update_phase_hint()
+		_update_tutorial()
 	if not _committed and not TARGET_MODE:
 		if _idle_tap > 0.45 and open_len >= OPEN_MIN and not locked and not frog.jumping:
 			_flow_commit()
@@ -1206,22 +1252,21 @@ func _update_flow(delta: float) -> void:
 				nibblers += 1
 	if nibblers > 0:
 		_sipped_since_land = true
-		dew_size -= 0.022 * mini(nibblers, 5) * delta
+		dew_size = maxf(dew_size - 0.011 * mini(nibblers, 5) * delta, DEW_REST)   # v114: gentle, never to nothing
 		_nibble_fx -= delta
 		if _nibble_fx <= 0.0:
 			_nibble_fx = _rng.randf_range(0.35, 0.6)
 			frog.jelly_v += _rng.randf_range(-3.0, 3.0)
 			_spawn_ripple(dew_local + Vector2(_rng.randf_range(-14, 14), _rng.randf_range(-6, 6)), 0.35, 1)
-			_play("plop", _rng.randf_range(1.8, 2.1), -18.0)
+			_play("plop", _rng.randf_range(1.0, 1.15), -24.0)   # v114: soft drip, not a high pop
 		if dew_size < 0.68 and not _nibble_warned:
 			_nibble_warned = true
-			_show_quip("물고기들이 이슬을 마셔요! 톡톡 두드려 쫓아요")
+			_show_quip("물고기들이 이슬과 놀고 싶나 봐요")
 	if dew_size > 0.8:
 		_nibble_warned = false
 	dew_size = clampf(dew_size, 0.0, DEW_MAX)
 	frog.size_k = lerpf(frog.size_k, dew_size, clampf(delta * 5.0, 0.0, 1.0))
-	if not SPEC and dew_size <= DEW_MIN and not _dew_gone_flag and not frog.jumping:
-		_dew_gone()
+	# v114 healing mode: the dew never disappears; it just stays small until it moves again
 
 
 # a tap's ripple pushes every leaf inside it outward, strongest at the centre
@@ -1549,6 +1594,7 @@ func _save_book() -> void:
 	cf.set_value("book", "far_jumps", far_jumps)
 	cf.set_value("book", "giant_seen", giant_seen)
 	cf.set_value("book", "corner_taps", corner_taps)
+	cf.set_value("book", "tutorial_done", tutorial_done)
 	cf.set_value("settings", "vibration", vib_level)
 	cf.save("user://moonlit_pond.cfg")
 
@@ -1566,6 +1612,7 @@ func _load_book() -> void:
 	far_jumps = int(cf.get_value("book", "far_jumps", 0))
 	giant_seen = int(cf.get_value("book", "giant_seen", 0))
 	corner_taps = int(cf.get_value("book", "corner_taps", 0))
+	tutorial_done = bool(cf.get_value("book", "tutorial_done", false))
 	vib_level = clampi(int(cf.get_value("settings", "vibration", 2)), 0, 3)
 
 
@@ -1911,20 +1958,8 @@ func _update_spec(delta: float, dew_local: Vector2, top: float, bottom: float) -
 			_haptic("fish")
 			if frog.mood_t <= 0.0:
 				frog.feel(2, 0.5)
-	# 20 s on one pad: it slowly sinks, then the dew is gone
+	# v114 healing mode: staying on a pad is fine; nothing sinks and nothing ends
 	_stay_t += delta
-	if _stay_t > STAY_LIMIT * 0.6:
-		var q:= clampf((_stay_t - STAY_LIMIT * 0.6) / (STAY_LIMIT * 0.4), 0.0, 1.0)
-		pd.submerged = 0.55 * q
-		# its pad is going under: the dew looks worried
-		frog.feel(2, 0.4)
-		if _stay_hints < 2 and _stay_t - delta <= STAY_LIMIT * 0.6:
-			_stay_hints += 1
-			_show_quip("오래 머물면 연잎이 가라앉아요")
-		if _stay_t - delta <= STAY_LIMIT * 0.6:
-			_haptic("warn")
-	if _stay_t >= STAY_LIMIT:
-		_sink_game_over()
 
 
 func _sink_game_over() -> void:
@@ -2948,6 +2983,7 @@ func _reveal_check(local: Vector2) -> void:
 				return
 			if (local.distance_to(g.head_pos()) < RIPPLE_REACH or local.distance_to(g.position) < RIPPLE_REACH) and _rng.randf() < REVEAL_CHANCE:
 				_found_fx(g)
+				koi_met += 1
 				_log("koi_found")
 				if shots_dir != "" and _peek_snaps < 3:
 					_peek_snaps += 1
@@ -3671,6 +3707,7 @@ func _check_knocked() -> void:
 
 func _draw_touch_fx() -> void:
 	_draw_flow_fx()
+	_draw_tutorial()
 	# finger wake on the water
 	var n:= _wake_pts.size()
 	if n >= 2:
@@ -4376,21 +4413,11 @@ func _draw_hud() -> void:
 	if in_intro:
 		return
 	var cx:= vs.x * 0.5
-	var big:= 30
-	var txt:= str(score)
-	var tw:= font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, big).x
-	hud.draw_string(font, Vector2(cx - tw * 0.5 + 1, 54), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, big, Color(0, 0.05, 0.06, 0.45))
-	hud.draw_string(font, Vector2(cx - tw * 0.5, 52), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, big, Color(0.97, 1.0, 0.97))
-	var sub:= "연속 %d   ·   건넌 잎 %d" % [rhythm_combo, step]
-	var sw:= font.get_string_size(sub, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x
-	hud.draw_string(font, Vector2(cx - sw * 0.5, 70), sub, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.9, 0.97, 0.95, 0.8))
-	var bp:= beat_pulse
-	hud.draw_arc(Vector2(cx, 22), 7.0 + 5.0 * bp, 0, TAU, 32, Color(0.85, 1.0, 0.95, 0.35 + 0.5 * bp), 1.6, true)
-	hud.draw_circle(Vector2(cx, 22), 2.5 + 2.0 * bp, Color(0.9, 1.0, 0.97, 0.6 + 0.4 * bp))
-	var filled:= rhythm_combo % TURTLE_EVERY
-	for i in TURTLE_EVERY:
-		var c:= Color(0.75, 1.0, 0.92, 1.0) if i < filled else Color(1, 1, 1, 0.2)
-		hud.draw_circle(Vector2(cx + (i - (TURTLE_EVERY - 1) * 0.5) * 12.0, 84), 3.0, c)
+	# v114: no score or combo on screen (healing mode); a quiet note of today's walk instead
+	var sub:= "건넌 잎 %d   ·   만난 친구 %d" % [step, koi_met + turtles]
+	var sw:= font.get_string_size(sub, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x
+	hud.draw_string(font, Vector2(cx - sw * 0.5 + 1, 128), sub, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0, 0.05, 0.06, 0.35))
+	hud.draw_string(font, Vector2(cx - sw * 0.5, 127), sub, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.93, 1.0, 0.96, 0.85))
 
 
 func _log(msg: String) -> void:
