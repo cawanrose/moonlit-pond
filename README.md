@@ -3,7 +3,7 @@
 Godot 4.7.2 · Android · 제작 moonshot2026
 
 ## 이 저장소에 있는 것
-- `game/` — 게임 코드와 씬, 프로젝트 설정 (v1.15, build 115)
+- `game/` — 게임 코드와 씬, 프로젝트 설정 (v1.16, build 116)
   - 직접 수정해 온 스크립트: `scripts/main.gd`, `intro.gd`, `giant_koi.gd`, `turtle.gd`, `lily_pad.gd`, `frog.gd`, `ripple.gd`, `giant_fish.gd`, `*.gdshader`
   - 나머지 `*.gdc` 는 원본 빌드(v0.71)에서 넘어온 컴파일된 스크립트
 - `tools/pack.py` — APK 다시 묶는 스크립트 (서명은 별도)
@@ -14,6 +14,7 @@ Godot 4.7.2 · Android · 제작 moonshot2026
 - 서명 키(keystore)와 비밀번호: 저장소에 절대 올리지 않음
 
 ## 최근 변경
+- v1.16 — 이슬 위 이름표, 사진을 안드로이드 MediaStore로 앨범(Pictures/MoonlitPond)에 저장 + 공유 버튼, 5초 영상(MediaRecorder H.264, Movies/MoonlitPond) + 공유
 - v1.15 — 이슬 이름 짓기(첫 산책에서 묻고, 화면 위 이름을 누르면 바꾸기), 사진 버튼(UI 숨기고 서명 넣어 휴대폰 사진첩 Pictures/MoonlitPond 에 저장)
 - v1.14 — 힐링 모드 1단계: 게임 오버 제거(연잎 가라앉음·물고기에게 이슬이 사라지는 일 없음), 점수·콤보 숨기고 "건넌 잎 · 만난 친구" 표시, 첫 산책 터치 안내 링
 - v1.13 — 점프/착지 "뿅" 소리 절반(-6dB)

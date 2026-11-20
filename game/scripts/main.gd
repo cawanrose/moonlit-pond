@@ -4,8 +4,8 @@ extends Node2D
 
 const DESIGN_W:= 360.0
 # build identity (APK protection guide §3): stays in every copy of the game, readable only from the compiled code
-const BUILD_NO:= 115
-const BUILD_VER:= "1.15"
+const BUILD_NO:= 116
+const BUILD_VER:= "1.16"
 const BUILD_DATE:= "2026-11-19"
 const MAKER_ID:= "moonshot2026"
 const BUILD_FP:= "mp-e1af284cb6ee4fa6"      # per-build fingerprint, recorded in the build log
@@ -252,6 +252,11 @@ func _build_scene() -> void:
 	frog.z_index = 5 if TARGET_MODE else 2
 	frog.shadow = frog_shadow
 	layer.add_child(frog)
+	# v116: a little name tag floats above the dew
+	name_tag = Node2D.new()
+	name_tag.z_index = 20
+	layer.add_child(name_tag)
+	name_tag.draw.connect(_draw_name_tag)
 
 	lotus = Lotus.new()
 	lotus.z_index = 4
@@ -458,6 +463,8 @@ func _layout() -> void:
 		vib_btn.position = Vector2(vs.x - 62, vs.y - 66)
 	if photo_btn:
 		photo_btn.position = Vector2(vs.x - 56, vs.y - 238)
+	if video_btn:
+		video_btn.position = Vector2(vs.x - 56, vs.y - 280)
 	if name_btn:
 		name_btn.position = Vector2(vs.x * 0.5 - 110, 110)
 	if credit:
@@ -778,6 +785,12 @@ var name_btn: Button
 var dew_name:= ""          # v115: the player names their dew on the first walk
 var _name_panel: Control
 var _photo_busy:= false
+var video_btn: Button       # v116: a five-second clip
+var name_tag: Node2D
+var _tag_t:= 0.0
+var _tag_a:= 1.0
+var _rec:= {}
+var _share_btn: Button
 var vib_btn: Button
 var vib_level:= 2  # 0 off, 1 weak, 2 mid, 3 strong
 var _hap_last:= -1000.0
@@ -1692,6 +1705,10 @@ func _build_book_ui(root: Control) -> void:
 	photo_btn = _pill_button("사진", Vector2(52, 32), Color(0.03, 0.14, 0.1))
 	photo_btn.pressed.connect(_take_photo)
 	root.add_child(photo_btn)
+	video_btn = _pill_button("영상", Vector2(52, 32), Color(0.03, 0.14, 0.1))
+	video_btn.pressed.connect(_start_video)
+	video_btn.visible = not OS.has_feature("web")
+	root.add_child(video_btn)
 	name_btn = Button.new()
 	name_btn.flat = true
 	name_btn.focus_mode = Control.FOCUS_NONE
@@ -4276,6 +4293,13 @@ func _process(delta: float) -> void:
 		if idle_time > 7.0 and frog.pose == "idle" and not frog.jumping:
 			frog.set_pose("sleepy")
 	hint.queue_redraw()
+	if name_tag:
+		_tag_t += delta
+		_tag_a = lerpf(_tag_a, 0.55 if frog.jumping else 1.0, minf(1.0, delta * 6.0))
+		name_tag.position = frog.position
+		name_tag.queue_redraw()
+	if not _rec.is_empty():
+		_video_tick(delta)
 	_update_held(delta)
 	if FLOW_MODE:
 		_update_flow(delta)
@@ -6001,51 +6025,168 @@ func _ask_dew_name() -> void:
 	edit.grab_focus()
 
 
-func _photo_dir() -> String:
-	if OS.get_name() == "Android":
-		var pics:= OS.get_system_dir(OS.SYSTEM_DIR_PICTURES)
-		if pics != "":
-			var d:= pics.path_join("MoonlitPond")
-			if DirAccess.make_dir_recursive_absolute(d) == OK:
-				return d
-	var u:= OS.get_user_data_dir().path_join("photos")
+# --- v116: name tag, photos and short clips into the phone album ---------------
+
+func _draw_name_tag() -> void:
+	if dew_name == "" or in_intro or frog == null or not frog.visible:
+		return
+	var a:= clampf(_tag_a * (1.0 - frog.evaporate), 0.0, 1.0)
+	if a <= 0.02:
+		return
+	var depth:= Main.depth_at(frog.global_position.y)
+	var r:= Frog.DEW_R * depth * frog.size_k
+	var fs:= 13
+	var tw:= font.get_string_size(dew_name, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	var w:= tw + 22.0
+	var h:= 21.0
+	var cy:= -frog.air_height - r * 1.9 - 18.0 + sin(_tag_t * 2.2) * 1.5
+	var rect:= Rect2(-w * 0.5, cy - h * 0.5, w, h)
+	var bg:= Color(0.02, 0.12, 0.09, 0.7 * a)
+	var sb:= StyleBoxFlat.new()
+	sb.bg_color = bg
+	sb.set_corner_radius_all(10)
+	sb.set_border_width_all(1)
+	sb.border_color = Color(0.85, 1.0, 0.8, 0.35 * a)
+	sb.anti_aliasing = true
+	name_tag.draw_style_box(sb, rect)
+	var by:= cy + h * 0.5
+	name_tag.draw_colored_polygon(PackedVector2Array([Vector2(-4, by - 0.5), Vector2(4, by - 0.5), Vector2(0, by + 5)]), bg)
+	var base:= Vector2(-tw * 0.5, cy + fs * 0.36)
+	name_tag.draw_string_outline(font, base, dew_name, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, 3, Color(0.01, 0.05, 0.04, 0.5 * a))
+	name_tag.draw_string(font, base, dew_name, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(1.0, 0.98, 0.88, a))
+
+
+func _android_rt() -> Object:
+	if OS.get_name() != "Android" or not Engine.has_singleton("AndroidRuntime"):
+		return null
+	return Engine.get_singleton("AndroidRuntime")
+
+
+func _jx(tag: String) -> bool:
+	# true when the last Java call threw; the exception is logged and cleared
+	var ex = JavaClassWrapper.get_exception()
+	if ex != null:
+		_log("java %s: %s" % [tag, str(ex.toString())])
+		return true
+	return false
+
+
+# Android 10+: put the file into the shared album through MediaStore (no storage permission needed).
+# Returns the content Uri (a JavaObject) or null.
+func _save_to_album(bytes: PackedByteArray, fname: String, mime: String, video: bool):
+	var rt = _android_rt()
+	if rt == null:
+		return null
+	var ver = JavaClassWrapper.wrap("android.os.Build$VERSION")
+	if ver == null or int(ver.SDK_INT) < 29:
+		return null
+	var ctx = rt.getApplicationContext()
+	var resolver = ctx.getContentResolver()
+	var cv = JavaClassWrapper.wrap("android.content.ContentValues").ContentValues()
+	cv.put("_display_name", fname)
+	cv.put("mime_type", mime)
+	cv.put("relative_path", ("Movies" if video else "Pictures") + "/MoonlitPond")
+	var coll = JavaClassWrapper.wrap("android.net.Uri").parse("content://media/external/%s/media" % ("video" if video else "images"))
+	var uri = resolver.insert(coll, cv)
+	if _jx("insert") or uri == null:
+		return null
+	var os = resolver.openOutputStream(uri)
+	if _jx("open") or os == null:
+		return null
+	os.write(bytes)
+	os.flush()
+	os.close()
+	if _jx("write"):
+		return null
+	_log("album saved %s (%d bytes)" % [fname, bytes.size()])
+	return uri
+
+
+func _share(uri, mime: String) -> void:
+	var rt = _android_rt()
+	if rt == null or uri == null:
+		return
+	var who:= dew_name if dew_name != "" else "이슬"
+	var Intent = JavaClassWrapper.wrap("android.content.Intent")
+	var it = Intent.Intent()
+	it.setAction("android.intent.action.SEND")
+	it.setType(mime)
+	it.putExtra("android.intent.extra.STREAM", uri)
+	it.putExtra("android.intent.extra.TEXT", "폴짝, 달빛 연못 · %s의 산책" % who)
+	it.addFlags(1)
+	var chooser = Intent.createChooser(it, "공유하기")
+	rt.getActivity().startActivity(chooser)
+	_jx("share")
+
+
+func _offer_share(uri, mime: String) -> void:
+	if _share_btn and is_instance_valid(_share_btn):
+		_share_btn.queue_free()
+	if uri == null:
+		return
+	var b:= _pill_button("공유하기", Vector2(96, 34), Color(0.1, 0.32, 0.2))
+	b.position = Vector2(vs.x * 0.5 - 48, vs.y - 150)
+	b.pressed.connect(func ():
+		_haptic("tap")
+		_share(uri, mime)
+		b.queue_free())
+	ui.add_child(b)
+	_share_btn = b
+	b.modulate.a = 0.0
+	var tw:= create_tween()
+	tw.tween_property(b, "modulate:a", 1.0, 0.25)
+	tw.tween_interval(6.0)
+	tw.tween_property(b, "modulate:a", 0.0, 0.6)
+	tw.tween_callback(b.queue_free)
+
+
+func _fallback_dir(sub: String) -> String:
+	var u:= OS.get_user_data_dir().path_join(sub)
 	DirAccess.make_dir_recursive_absolute(u)
 	return u
 
 
-func _take_photo() -> void:
-	if _photo_busy or in_intro:
-		return
-	_photo_busy = true
-	_haptic("tap")
-	# hide the buttons and counters, keep a small signature at the bottom
+func _stamp() -> String:
+	return Time.get_datetime_string_from_system().replace(":", "").replace("-", "").replace("T", "_")
+
+
+# hide buttons and counters, add a small signature; returns what to restore
+func _hide_ui_for_capture() -> Array:
 	var hidden:= []
-	for c in [sound_btn, book_btn, restart_btn, vib_btn, photo_btn, name_btn, hud, drops_label, credit]:
+	for c in [sound_btn, book_btn, restart_btn, vib_btn, photo_btn, video_btn, name_btn, hud, drops_label, credit, _share_btn]:
 		if c and is_instance_valid(c) and c.visible:
 			c.visible = false
 			hidden.append(c)
-	if drops_fx:
+	if drops_fx and drops_fx.visible:
 		drops_fx.visible = false
-	if _quip_label and is_instance_valid(_quip_label):
+		hidden.append(drops_fx)
+	if drops_fx and drops_fx.has_meta("fish_label"):
+		var fl: Label = drops_fx.get_meta("fish_label")
+		if is_instance_valid(fl) and fl.visible:
+			fl.visible = false
+			hidden.append(fl)
+	if _quip_label and is_instance_valid(_quip_label) and _quip_label.visible:
 		_quip_label.visible = false
+		hidden.append(_quip_label)
 	var who:= dew_name if dew_name != "" else "이슬"
 	var sig:= _label("폴짝, 달빛 연못  ·  %s의 산책" % who, 13, Color(1.0, 0.98, 0.9, 0.9))
 	sig.size = Vector2(vs.x, 20)
 	sig.position = Vector2(0, vs.y - 34)
 	ui.add_child(sig)
-	await RenderingServer.frame_post_draw
-	await RenderingServer.frame_post_draw
-	var img:= get_viewport().get_texture().get_image()
-	sig.queue_free()
+	hidden.append(sig)
+	return hidden
+
+
+func _restore_ui(hidden: Array) -> void:
 	for c in hidden:
-		c.visible = true
-	if drops_fx:
-		drops_fx.visible = true
-	var stamp:= Time.get_datetime_string_from_system().replace(":", "").replace("-", "").replace("T", "_")
-	var path:= _photo_dir().path_join("moonlitpond_%s.png" % stamp)
-	var err:= img.save_png(path)
-	_log("photo %s err=%d" % [path, err])
-	# a soft white flash, like a shutter
+		if c and is_instance_valid(c):
+			if c is Label and String(c.text).begins_with("폴짝, 달빛 연못  ·"):
+				c.queue_free()
+			else:
+				c.visible = true
+
+
+func _shutter() -> void:
 	var flash:= ColorRect.new()
 	flash.color = Color(1, 1, 1, 0.55)
 	flash.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -6055,10 +6196,161 @@ func _take_photo() -> void:
 	tw.tween_property(flash, "color:a", 0.0, 0.45)
 	tw.tween_callback(flash.queue_free)
 	_play("sparkle", 1.2, -14.0)
-	if err == OK:
-		_show_quip("사진을 앨범(Pictures/MoonlitPond)에 담았어요" if OS.get_name() == "Android" else "사진을 저장했어요")
-		if OS.has_feature("web"):
-			JavaScriptBridge.download_buffer(img.save_png_to_buffer(), path.get_file(), "image/png")
+
+
+func _take_photo() -> void:
+	if _photo_busy or in_intro or not _rec.is_empty():
+		return
+	_photo_busy = true
+	_haptic("tap")
+	var hidden:= _hide_ui_for_capture()
+	await RenderingServer.frame_post_draw
+	await RenderingServer.frame_post_draw
+	var img:= get_viewport().get_texture().get_image()
+	_restore_ui(hidden)
+	var fname:= "moonlitpond_%s.png" % _stamp()
+	var bytes:= img.save_png_to_buffer()
+	_shutter()
+	var uri = _save_to_album(bytes, fname, "image/png", false)
+	if uri != null:
+		_show_quip("사진을 앨범에 담았어요")
+		_offer_share(uri, "image/png")
+	elif OS.has_feature("web"):
+		JavaScriptBridge.download_buffer(bytes, fname, "image/png")
+		_show_quip("사진을 저장했어요")
 	else:
-		_show_quip("사진을 저장하지 못했어요")
+		var path:= _fallback_dir("photos").path_join(fname)
+		var err:= img.save_png(path)
+		_log("photo %s err=%d" % [path, err])
+		_show_quip("사진을 저장했어요" if err == OK else "사진을 저장하지 못했어요")
 	_photo_busy = false
+
+
+# --- five-second clip ------------------------------------------------------------
+# Each frame the screen is read back, scaled, and drawn onto MediaRecorder's input
+# surface; MediaRecorder encodes H.264 into an mp4 that then goes to the album.
+const CLIP_SEC:= 5.0
+const CLIP_FPS:= 24.0
+const CLIP_W:= 576
+const REC_BAR_PX:= 8   # bottom rows hold the progress bar; they are cut from the clip
+
+func _start_video() -> void:
+	if _photo_busy or in_intro or not _rec.is_empty():
+		return
+	var tex_sz:= Vector2(get_viewport().get_texture().get_size())
+	var w:= CLIP_W
+	var h:= int(round(w * (tex_sz.y - REC_BAR_PX) / tex_sz.x / 16.0)) * 16
+	var rec:= {"t": 0.0, "acc": 1.0, "w": w, "h": h, "n": 0, "tex": tex_sz}
+	var rt = _android_rt()
+	if rt != null:
+		var ctx = rt.getApplicationContext()
+		var path: String = str(ctx.getCacheDir().getAbsolutePath()).path_join("clip_%s.mp4" % _stamp())
+		var mr = JavaClassWrapper.wrap("android.media.MediaRecorder").MediaRecorder()
+		if _jx("recorder") or mr == null:
+			_show_quip("이 기기에서는 영상을 찍을 수 없어요")
+			return
+		mr.setVideoSource(2)          # SURFACE
+		mr.setOutputFormat(2)         # MPEG_4
+		mr.setOutputFile(path)
+		mr.setVideoEncoder(2)         # H264
+		mr.setVideoSize(w, h)
+		mr.setVideoFrameRate(int(CLIP_FPS))
+		mr.setVideoEncodingBitRate(6000000)
+		mr.prepare()
+		if _jx("prepare"):
+			mr.release()
+			_show_quip("이 기기에서는 영상을 찍을 수 없어요")
+			return
+		var surf = mr.getSurface()
+		mr.start()
+		if _jx("start") or surf == null:
+			mr.release()
+			_show_quip("이 기기에서는 영상을 찍을 수 없어요")
+			return
+		var cfg = JavaClassWrapper.wrap("android.graphics.Bitmap$Config").valueOf("ARGB_8888")
+		rec["mr"] = mr
+		rec["surf"] = surf
+		rec["path"] = path
+		rec["bmp"] = JavaClassWrapper.wrap("android.graphics.Bitmap").createBitmap(w, h, cfg)
+		rec["paint"] = JavaClassWrapper.wrap("android.graphics.Paint").Paint(2)   # FILTER_BITMAP_FLAG
+		rec["bb"] = JavaClassWrapper.wrap("java.nio.ByteBuffer")
+		_jx("bitmap")
+	else:
+		rec["frames"] = []
+	_haptic("tap")
+	_play("sparkle", 0.9, -16.0)
+	rec["hidden"] = _hide_ui_for_capture()
+	# the progress bar lives in the bottom rows, which are cropped out of the clip
+	var bar:= ColorRect.new()
+	bar.color = Color(1.0, 0.55, 0.45, 0.9)
+	bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var bh:= (REC_BAR_PX - 2) * vs.y / tex_sz.y
+	bar.position = Vector2(0, vs.y - bh)
+	bar.size = Vector2(0, bh)
+	ui.add_child(bar)
+	rec["bar"] = bar
+	_rec = rec
+
+
+func _video_tick(delta: float) -> void:
+	_rec.t += delta
+	_rec.acc += delta
+	var bar: ColorRect = _rec.bar
+	bar.size.x = vs.x * clampf(_rec.t / CLIP_SEC, 0.0, 1.0)
+	if _rec.t > 0.05 and _rec.acc >= 1.0 / CLIP_FPS:
+		_rec.acc = minf(_rec.acc - 1.0 / CLIP_FPS, 1.0 / CLIP_FPS)
+		var img:= get_viewport().get_texture().get_image()
+		var full:= img.get_size()
+		img = img.get_region(Rect2i(0, 0, full.x, full.y - REC_BAR_PX))
+		img.resize(_rec.w, _rec.h, Image.INTERPOLATE_BILINEAR)
+		img.convert(Image.FORMAT_RGBA8)
+		if _rec.has("mr"):
+			_push_frame(img)
+		elif _rec.frames.size() < 3 and _rec.n % 40 == 0:
+			_rec.frames.append(img)
+		_rec.n += 1
+	if _rec.t >= CLIP_SEC:
+		_finish_video()
+
+
+func _push_frame(img: Image) -> void:
+	var buf = _rec.bb.wrap(img.get_data())
+	_rec.bmp.copyPixelsFromBuffer(buf)
+	var surf = _rec.surf
+	var cv = surf.lockHardwareCanvas()
+	if _jx("lock") or cv == null:
+		return
+	cv.drawBitmap(_rec.bmp, 0.0, 0.0, _rec.paint)
+	surf.unlockCanvasAndPost(cv)
+	_jx("post")
+
+
+func _finish_video() -> void:
+	var rec:= _rec
+	_rec = {}
+	_restore_ui(rec.hidden)
+	(rec.bar as ColorRect).queue_free()
+	_shutter()
+	_log("clip frames=%d size=%dx%d" % [rec.n, rec.w, rec.h])
+	if rec.has("mr"):
+		var mr = rec.mr
+		mr.stop()
+		var bad:= _jx("stop")
+		mr.release()
+		var uri = null
+		if not bad:
+			var bytes:= FileAccess.get_file_as_bytes(rec.path)
+			if bytes.size() > 0:
+				uri = _save_to_album(bytes, "moonlitpond_%s.mp4" % _stamp(), "video/mp4", true)
+		DirAccess.remove_absolute(rec.path)
+		if uri != null:
+			_show_quip("5초 영상을 앨범에 담았어요")
+			_offer_share(uri, "video/mp4")
+		else:
+			_show_quip("영상을 저장하지 못했어요")
+	else:
+		# desktop: keep a few sample frames so the capture can be checked
+		var d:= _fallback_dir("clips")
+		for i in rec.frames.size():
+			(rec.frames[i] as Image).save_png(d.path_join("clip_%s_%d.png" % [_stamp(), i]))
+		_show_quip("영상 미리보기를 저장했어요")
